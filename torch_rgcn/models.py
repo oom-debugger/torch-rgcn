@@ -3,6 +3,7 @@ from torch_rgcn.utils import add_inverse_and_self, select_w_init
 import torch.nn.functional as F
 from torch import nn
 import torch
+from riemannian.manifolds.poincare import PoincareBall
 
 torch.set_printoptions(precision=5)
 
@@ -18,7 +19,9 @@ class LinkPredictor(nn.Module):
                  nrel=None,
                  nfeat=None,
                  encoder_config=None,
-                 decoder_config=None):
+                 decoder_config=None,
+                 curvature=None,
+                 scale=1):
         super(LinkPredictor, self).__init__()
 
         # Encoder config
@@ -49,10 +52,10 @@ class LinkPredictor(nn.Module):
         self.nemb = nemb
         self.decoder_l2_type = decoder_l2_type
         self.decoder_l2 = decoder_l2
-
         self.node_embeddings = nn.Parameter(torch.FloatTensor(nnodes, nemb))
         self.node_embeddings_bias = nn.Parameter(torch.zeros(1, nemb))
         init = select_w_init(encoder_w_init)
+        print (self.node_embeddings.shape)
         init(self.node_embeddings)
         # Checkpoint 1
         # print('self.node_embeddings')
@@ -88,7 +91,10 @@ class LinkPredictor(nn.Module):
                 w_gain=encoder_gain,
                 b_init=encoder_b_init
             )
-
+        self.c = curvature
+        self.scale = scale
+        if self.c:
+            print ('Hyperbolic Normalization is applied to the model with curevature {%s} and scale {%s}' % (self.c, self.scale))
         # Decoder
         self.scoring_function = DistMult(nrel, nemb, nnodes, nrel, decoder_w_init, decoder_gain, decoder_b_init)
 
@@ -121,7 +127,11 @@ class LinkPredictor(nn.Module):
         if self.rgcn_layers == 2:
             x = F.relu(x)
             x = self.rgc2(graph, features=x)
-
+        #############################################################
+        if self.c:
+            x = self.scale * PoincareBall.proj(PoincareBall.expmap0(PoincareBall.proj_tan0(x, self.c), c=self.c), c=self.c)
+        #############################################################     
+        
         scores = self.scoring_function(triples, x)
         # Checkpoint 7
         print('min', torch.min(scores))
@@ -146,7 +156,9 @@ class NodeClassifier(nn.Module):
                  nclass=None,
                  edge_dropout=None,
                  decomposition=None,
-                 nemb=None):
+                 nemb=None,
+                 curvature=None,
+                 scale=1):
         super(NodeClassifier, self).__init__()
 
         self.nlayers = nlayers
@@ -188,14 +200,26 @@ class NodeClassifier(nn.Module):
                 decomposition=decomposition,
                 vertical_stacking=True
             )
+        self.c = curvature
+        self.scale = scale
+        if self.c:
+            print ('Hyperbolic Normalization is applied to the model with curevature {%s} and scale {%s}' % (self.c, self.scale))
 
     def forward(self):
         """ Embed relational graph and then compute class probabilities """
+
         x = self.rgc1()
 
+        ############################################################
+        # convert the Euclidean embeddings to poincare embeddings
+#        x = PoincareBall.euclidean2poincare(x, c=self.c, scale=self.c)
+        ############################################################
         if self.nlayers == 2:
             x = F.relu(x)
             x = self.rgc2(features=x)
+        
+        if self.c:
+            x = self.scale * PoincareBall.proj(PoincareBall.expmap0(PoincareBall.proj_tan0(x, self.c), c=self.c), c=self.c)
 
         return x
 
@@ -212,12 +236,19 @@ class CompressionRelationPredictor(LinkPredictor):
                  nrel=None,
                  nfeat=None,
                  encoder_config=None,
-                 decoder_config=None):
+                 decoder_config=None,
+                 curvature=None,
+                 scale=1):
 
         nhid = encoder_config["hidden1_size"] if "hidden1_size" in encoder_config else None
         nemb = encoder_config["node_embedding"] if "node_embedding" in encoder_config else None
         nfeat = nhid
 
+        self.c = curvature
+        self.scale = scale
+        if self.c:
+            print ('Hyperbolic Normalization is applied to the model with curevature {%s} and scale {%s}' % (self.c, self.scale))
+        
         super(CompressionRelationPredictor, self) \
             .__init__(nnodes, nrel, nfeat, encoder_config, decoder_config)
 
@@ -240,6 +271,11 @@ class CompressionRelationPredictor(LinkPredictor):
 
         x = self.node_embeddings + self.decoding_layer(x)
 
+        ############################################################
+        if self.c:
+            x = self.scale * PoincareBall.proj(PoincareBall.expmap0(PoincareBall.proj_tan0(x, self.c), c=self.c), c=self.c)
+        ############################################################
+
         scores = self.scoring_function(triples, x)
         penalty = self.compute_penalty(triples, x)
         return scores, penalty
@@ -257,7 +293,9 @@ class EmbeddingNodeClassifier(NodeClassifier):
                  nclass=None,
                  edge_dropout=None,
                  decomposition=None,
-                 nemb=None):
+                 nemb=None,
+                 curvature=None,
+                 scale=1):
 
         assert nemb is not None, "Size of node embedding not specified!"
         nfeat = nemb  # Configure RGCN to accept node embeddings as feature matrix
@@ -268,6 +306,11 @@ class EmbeddingNodeClassifier(NodeClassifier):
         super(EmbeddingNodeClassifier, self)\
             .__init__(triples, nnodes, nrel, nfeat, nhid, 1, nclass, edge_dropout, decomposition)
 
+        self.c = curvature
+        self.scale = scale
+        if self.c:
+            print ('Hyperbolic Normalization is applied to the model with curevature {%s} and scale {%s}' % (self.c, self.scale))
+        
         # This model has a custom first layer
         self.rgcn_no_hidden = RelationalGraphConvolutionNC(triples=self.triples_plus,
                                                          num_nodes=nnodes,
@@ -292,5 +335,9 @@ class EmbeddingNodeClassifier(NodeClassifier):
         # Normally there will be checked if the desired number of layers is 2, but this model implies it (for now).
         x = F.relu(x)
         x = self.rgc1(features=x)
+        ############################################################
+        if self.c:
+            x = self.scale * PoincareBall.proj(PoincareBall.expmap0(PoincareBall.proj_tan0(x, self.c), c=self.c), c=self.c)
+        ############################################################
 
         return x

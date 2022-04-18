@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import torch
 import time
 
+from riemannian.optimizer.radam import RiemannianAdam
+
 """ 
 Relational Graph Convolution Network for link prediction. 
 Reproduced as described in https://arxiv.org/abs/1703.06103 (Section 4).
@@ -46,6 +48,9 @@ def train(dataset,
     eval_batch_size = evaluation["batch_size"] if "batch_size" in evaluation else 16
     eval_verbose = evaluation["verbose"] if "verbose" in evaluation else False
 
+    curvature =  encoder["curvature"] if "curvature" in encoder else None
+    scale =  encoder["scale"] if "scale" in encoder else None
+
     # Note: Validation dataset will be used as test if this is not a test run
     (n2i, nodes), (r2i, relations), train, test, all_triples = load_link_prediction_data(dataset["name"], use_test_set=final_run)
     true_triples = generate_true_dict(all_triples)
@@ -85,7 +90,9 @@ def train(dataset,
         nnodes=num_nodes,
         nrel=num_relations,
         encoder_config=encoder,
-        decoder_config=decoder
+        decoder_config=decoder,
+        curvature=curvature,
+        scale=scale,
     )
 
     if use_cuda:
@@ -93,6 +100,8 @@ def train(dataset,
 
     if training["optimiser"]["algorithm"] == 'adam':
         optimiser = torch.optim.Adam
+    elif training["optimiser"]["algorithm"] == 'radam':
+        optimiser = RiemannianAdam
     elif training["optimiser"]["algorithm"] == 'adamw':
         optimiser = torch.optim.AdamW
     elif training["optimiser"]["algorithm"] == 'adagrad':
@@ -100,7 +109,7 @@ def train(dataset,
     elif training["optimiser"]["algorithm"] == 'sgd':
         optimiser = torch.optim.SGD
     else:
-        raise NotImplementedError(f'\'{training["optimiser"]["algorithm"]}\' optimiser has not been implemented!')
+        raise NotImplementedError('%s optimiser has not been implemented!' % training["optimiser"]["algorithm"])
 
     optimiser = optimiser(
         model.parameters(),

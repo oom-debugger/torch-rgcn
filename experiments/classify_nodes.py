@@ -7,6 +7,9 @@ import torch.nn as nn
 import torch
 import time
 
+from riemannian.optimizer.radam import RiemannianAdam
+
+
 """ 
 Relational Graph Convolution Network for node classification. 
 Reproduced as described in https://arxiv.org/abs/1703.06103 (Section 3).
@@ -36,6 +39,8 @@ def train_model(dataset,
     nemb = rgcn["node_embeddings"] if "node_embeddings" in rgcn else 10
     node_embedding_l2_penalty = rgcn["node_embedding_l2_penalty"] if "node_embedding_l2_penalty" in rgcn else 0.0
     final_run = evaluation["final_run"] if "final_run" in evaluation else False
+    curvature =  rgcn["curvature"] if "curvature" in rgcn else None
+    scale =  rgcn["scale"] if "scale" in rgcn else None
 
     # Load Data
     # Note: Validation dataset will be used as test if this is not a test run
@@ -77,13 +82,17 @@ def train_model(dataset,
         nhid=nhid,
         nlayers=nlayers,
         decomposition=decomposition,
-        nemb=nemb)
+        nemb=nemb,
+        curvature=curvature,
+        scale=scale)
 
     if use_cuda:
         model.cuda()
 
     if training["optimiser"]["algorithm"] == 'adam':
         optimiser = torch.optim.Adam
+    elif training["optimiser"]["algorithm"] == 'radam':
+        optimiser = RiemannianAdam
     elif training["optimiser"]["algorithm"] == 'adamw':
         optimiser = torch.optim.AdamW
     elif training["optimiser"]["algorithm"] == 'adagrad':
