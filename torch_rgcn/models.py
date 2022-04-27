@@ -139,7 +139,6 @@ class LinkPredictor(nn.Module):
         print('mean', torch.mean(scores))
         print('std', torch.std(scores))
         print('size', scores.size())
-        exit()
         penalty = self.compute_penalty(triples, x)
         return scores, penalty
 
