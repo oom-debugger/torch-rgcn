@@ -1,4 +1,4 @@
-from torch_rgcn.utils import create_adjaceny_matrix, select_w_init, select_b_init, 
+from torch_rgcn.utils import create_adjaceny_matrix, select_w_init, select_b_init
 from torch.nn.modules.module import Module
 from torch.nn.parameter import Parameter
 from torch import nn
