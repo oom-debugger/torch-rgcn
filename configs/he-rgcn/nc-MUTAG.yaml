@@ -5,7 +5,7 @@ dataset:
 training:
   epochs: 50
   optimiser:
-    algorithm: adam
+#    algorithm: adam
     ####################
     algorithm: radam
     ####################

@@ -146,7 +146,7 @@ def add_inverse_and_self(triples, num_nodes, num_rels, device='cpu'):
 def stack_matrices(triples, num_nodes, num_rels, vertical_stacking=True, device='cpu'):
     """
     Computes a sparse adjacency matrix for the given graph (the adjacency matrices of all
-    relations are stacked vertically).
+    relations are stacked vertically).    
     """
     assert triples.dtype == torch.long
 
@@ -167,6 +167,7 @@ def stack_matrices(triples, num_nodes, num_rels, vertical_stacking=True, device=
     assert indices[:, 1].max() < size[1], f'{indices[1, :].max()}, {size}, {r}'
 
     return indices, size
+
 
 def block_diag(m):
     """
@@ -198,8 +199,10 @@ def block_diag(m):
         siz0 + torch.Size(torch.tensor(siz1) * n)
     )
 
+
 def attach_dim(v, n_dim_to_prepend=0, n_dim_to_append=0):
     return v.reshape(torch.Size([1] * n_dim_to_prepend) + v.shape + torch.Size([1] * n_dim_to_append))
+
 
 def split_spo(triples):
     """ Splits tensor into subject, predicate and object """
@@ -207,3 +210,37 @@ def split_spo(triples):
         return triples[:, 0], triples[:, 1], triples[:, 2]
     else:
         return triples[:, :, 0], triples[:, :, 1], triples[:, :, 2]
+
+
+def create_adjaceny_matrix(triples, num_nodes, num_relations, edge_dropout, vertical_stacking, device):
+
+    general_edge_count = int((triples.size(0) - num_nodes)/2)
+    self_edge_count = num_nodes
+    # Stack adjacency matrices either vertically or horizontally
+    # Note that it creates separate rows/columns for differnt relation types. 
+    adj_indices, adj_size = stack_matrices(
+        triples,
+        num_nodes,
+        num_relations,
+        vertical_stacking=vertical_stacking,
+        device=device
+    )
+    num_triples = adj_indices.size(0)
+    vals = torch.ones(num_triples, dtype=torch.float, device=device)
+
+    # Apply normalisation (vertical-stacking -> row-wise rum & horizontal-stacking -> column-wise sum)
+    sums = sum_sparse(adj_indices, vals, adj_size, row_normalisation=vertical_stacking, device=device)
+    if not vertical_stacking:
+        # Rearrange column-wise normalised value to reflect original order (because of transpose-trick)
+        n = general_edge_count
+        i = self_edge_count
+        sums = torch.cat([sums[n:2 * n], sums[:n], sums[-i:]], dim=0)
+
+    vals = vals / sums
+
+    # Construct adjacency matrix
+    if device == 'cuda':
+        adj = torch.cuda.sparse.FloatTensor(indices=adj_indices.t(), values=vals, size=adj_size)
+    else:
+        adj = torch.sparse.FloatTensor(indices=adj_indices.t(), values=vals, size=adj_size)
+    return adj

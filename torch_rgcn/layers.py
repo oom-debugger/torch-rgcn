@@ -1,4 +1,4 @@
-from torch_rgcn.utils import *
+from torch_rgcn.utils import create_adjaceny_matrix, select_w_init, select_b_init, 
 from torch.nn.modules.module import Module
 from torch.nn.parameter import Parameter
 from torch import nn
@@ -225,25 +225,17 @@ class RelationalGraphConvolutionNC(Module):
         assert (features is None) == (self.in_features is None), "in_features not provided!"
 
         in_dim = self.in_features if self.in_features is not None else self.num_nodes
-        triples = self.triples
         out_dim = self.out_features
-        edge_dropout = self.edge_dropout
-        weight_decomp = self.weight_decomp
-        num_nodes = self.num_nodes
-        num_relations = self.num_relations
-        vertical_stacking = self.vertical_stacking
-        general_edge_count = int((triples.size(0) - num_nodes)/2)
-        self_edge_count = num_nodes
 
         # Choose weights
-        if weight_decomp is None:
+        if self.weight_decomp is None:
             weights = self.weights
-        elif weight_decomp == 'basis':
+        elif self.weight_decomp == 'basis':
             weights = torch.einsum('rb, bio -> rio', self.comps, self.bases)
-        elif weight_decomp == 'block':
+        elif self.weight_decomp == 'block':
             weights = block_diag(self.blocks)
         else:
-            raise NotImplementedError(f'{weight_decomp} decomposition has not been implemented')
+            raise NotImplementedError('%s decomposition has not been implemented' % self.weight_decomp)
 
         # Determine whether to use cuda or not
         if weights.is_cuda:
@@ -251,42 +243,29 @@ class RelationalGraphConvolutionNC(Module):
         else:
             device = 'cpu'
 
-        # Stack adjacency matrices either vertically or horizontally
-        adj_indices, adj_size = stack_matrices(
-            triples,
-            num_nodes,
-            num_relations,
-            vertical_stacking=vertical_stacking,
-            device=device
-        )
-        num_triples = adj_indices.size(0)
-        vals = torch.ones(num_triples, dtype=torch.float, device=device)
-
-        # Apply normalisation (vertical-stacking -> row-wise rum & horizontal-stacking -> column-wise sum)
-        sums = sum_sparse(adj_indices, vals, adj_size, row_normalisation=vertical_stacking, device=device)
-        if not vertical_stacking:
-            # Rearrange column-wise normalised value to reflect original order (because of transpose-trick)
-            n = general_edge_count
-            i = self_edge_count
-            sums = torch.cat([sums[n:2 * n], sums[:n], sums[-i:]], dim=0)
-
-        vals = vals / sums
-
-        # Construct adjacency matrix
-        if device == 'cuda':
-            adj = torch.cuda.sparse.FloatTensor(indices=adj_indices.t(), values=vals, size=adj_size)
-        else:
-            adj = torch.sparse.FloatTensor(indices=adj_indices.t(), values=vals, size=adj_size)
-
+        ##################This block creates the Adjanceny Matrix #############
+        adj = create_adjaceny_matrix(
+                triples=self.triples, 
+                num_nodes=self.num_nodes,
+                num_relations=self.num_relations,
+                edge_dropout=self.edge_dropout, 
+                vertical_stacking=self.vertical_stacking,
+                device=device)
+        #######################################################################
         if self.diag_weight_matrix:
-            assert weights.size() == (num_relations, in_dim)
+            assert weights.size() == (self.num_relations, in_dim)
         else:
-            assert weights.size() == (num_relations, in_dim, out_dim)
+            assert weights.size() == (self.num_relations, in_dim, out_dim)
 
         if self.in_features is None:
             # Message passing if no features are given
-            output = torch.mm(adj, weights.view(num_relations * in_dim, out_dim))
+            output = torch.mm(adj, weights.view(self.num_relations * in_dim, out_dim))
         elif self.diag_weight_matrix:
+            # create a matrix with dim (k,i,j) from feature and weight matrixs.
+            # fw(k,i,j) = feature(i,j) * weights(k,j)
+            # note that according to this formula, for each node we have K weights associated with K-relation types.
+            # i-src node, j: dest node
+            # this does not take into account the destinations...
             fw = torch.einsum('ij,kj->kij', features, weights)
             fw = torch.reshape(fw, (self.num_relations * self.num_nodes, in_dim))
             output = torch.mm(adj, fw)
